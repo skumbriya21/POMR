@@ -1,111 +1,172 @@
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List
+import random
 
 
 @dataclass
 class RoomDimensions:
     """Размеры комнаты."""
-    width: float      # Ширина (метры)
-    length: float     # Длина (метры)
-    height: float     # Высота (метры)
-    area: float       # Площадь (м²)
+    width: float
+    length: float
+    height: float
+    area: float
 
 
 @dataclass
 class Window:
     """Окно в комнате."""
-    x: float          # Позиция по X (относительно комнаты)
-    y: float          # Позиция по Y (высота от пола)
-    width: float      # Ширина окна
-    height: float     # Высота окна
-    wall: str         # Стена: 'left', 'right', 'top', 'bottom'
+    x: float
+    y: float
+    width: float
+    height: float
+    wall: str
 
 
 class RoomDetector:
     """Определение геометрии комнаты."""
 
-    def __init__(self):
-        self.wall_height = 2.7  # Стандартная высота потолка
+    def __init__(self, known_width=None, known_length=None):
+        self.known_width = known_width
+        self.known_length = known_length
+        self.wall_height = 2.7
 
     def detect_room(self, points_3d):
+        """Определение размеров комнаты."""
         if len(points_3d) == 0:
             raise ValueError("Пустое облако точек")
 
-        # Находим bounding box
-        min_coords = np.min(points_3d, axis=0)
-        max_coords = np.max(points_3d, axis=0)
+        points_clean = self._remove_outliers(points_3d)
 
-        # Размеры по осям
+        min_coords = np.min(points_clean, axis=0)
+        max_coords = np.max(points_clean, axis=0)
+
         x_size = max_coords[0] - min_coords[0]
-        y_size = max_coords[1] - min_coords[1]  # Высота
+        y_size = max_coords[1] - min_coords[1]
         z_size = max_coords[2] - min_coords[2]
 
-        # Определяем ширину и длину (X и Z - горизонтальные оси)
         width = max(x_size, z_size)
         length = min(x_size, z_size)
-        height = y_size if y_size > 1.5 else self.wall_height
+        height = y_size
 
-        # Корректировка масштаба (если комната слишком маленькая или большая)
-        if width < 2 or width > 20:
-            scale_factor = 5.0 / width if width > 0 else 1.0
-            width *= scale_factor
-            length *= scale_factor
-            height *= scale_factor
+        # Калибровка
+        if self.known_width and width > 0:
+            scale = self.known_width / width
+            width *= scale
+            length *= scale
+            height *= scale
+        elif self.known_length and length > 0:
+            scale = self.known_length / length
+            width *= scale
+            length *= scale
+            height *= scale
+        else:
+            if 1.5 < height < 5:
+                scale = self.wall_height / height
+                width *= scale
+                length *= scale
+                height = self.wall_height
 
-        area = width * length
+        # Ограничения
+        width = max(min(width, 15), 2)
+        length = max(min(length, 15), 2)
+        height = max(min(height, 4), 2.4)
 
         return RoomDimensions(
             width=round(width, 2),
             length=round(length, 2),
             height=round(height, 2),
-            area=round(area, 2)
+            area=round(width * length, 2)
         )
 
-    def detect_windows(self, points_3d, images=None):
+    def _remove_outliers(self, points, threshold=2.0):
+        """Удаление выбросов."""
+        if len(points) < 10:
+            return points
+
+        mask = np.ones(len(points), dtype=bool)
+        for i in range(3):
+            median = np.median(points[:, i])
+            std = np.std(points[:, i])
+            if std > 0:
+                mask &= np.abs(points[:, i] - median) < threshold * std
+        return points[mask]
+
+    def auto_place_windows(self, room_dims: RoomDimensions) -> List[Window]:
+        """
+        Автоматическое размещение окон на основе размеров комнаты.
+
+        Логика:
+        - Комнаты < 4м: 1 окно
+        - Комнаты 4-6м: 1-2 окна
+        - Комнаты 6-10м: 2 окна
+        - Комнаты > 10м: 2-3 окна
+        """
         windows = []
 
-        # Упрощенная эвристика: предполагаем 1-2 окна на стенах
-        # В реальности здесь должен быть анализ плотности точек
+        # Определяем количество окон по площади
+        area = room_dims.area
 
-        room_dims = self.detect_room(points_3d)
+        if area < 12:
+            num_windows = 1
+        elif area < 24:
+            num_windows = random.choice([1, 2])
+        elif area < 40:
+            num_windows = 2
+        else:
+            num_windows = random.choice([2, 3])
 
-        # Добавляем "фиктивное" окно для демонстрации
-        if len(points_3d) > 100:
+        # Размеры окон (стандартные)
+        window_width = random.choice([1.0, 1.2, 1.5])
+        window_height = random.choice([1.2, 1.4, 1.5])
+
+        # Размещаем окна
+        walls = ['right', 'top', 'left', 'bottom']
+
+        for i in range(num_windows):
+            # Выбираем стену
+            if num_windows <= 2:
+                wall = walls[i % 2]  # right и top
+            else:
+                wall = walls[i % 4]
+
+            # Позиция вдоль стены (случайная, но не у края)
+            if wall in ['left', 'right']:
+                max_pos = room_dims.length
+                margin = room_dims.length * 0.15
+                x = random.uniform(margin, max_pos - margin - window_width)
+            else:
+                max_pos = room_dims.width
+                margin = room_dims.width * 0.15
+                x = random.uniform(margin, max_pos - margin - window_width)
+
+            # Высота от пола (стандартная)
+            y = random.uniform(0.8, 1.2)
+
             windows.append(Window(
-                x=room_dims.width * 0.3,
-                y=1.0,  # Высота от пола
-                width=1.2,
-                height=1.5,
-                wall='right'
+                x=round(x, 2),
+                y=round(y, 2),
+                width=window_width,
+                height=window_height,
+                wall=wall
             ))
-
-            # Второе окно с вероятностью 50%
-            if len(points_3d) > 500:
-                windows.append(Window(
-                    x=room_dims.length * 0.4,
-                    y=1.0,
-                    width=1.0,
-                    height=1.2,
-                    wall='top'
-                ))
 
         return windows
 
-    def get_room_bounds(self, points_3d):
-        """Получение границ комнаты."""
-        min_coords = np.min(points_3d, axis=0)
-        max_coords = np.max(points_3d, axis=0)
-        return min_coords, max_coords
+    def detect_windows(self, points_3d, images=None):
+        """Устаревший метод - используйте auto_place_windows."""
+        return []
 
 
 def ask_room_dimensions():
-    print("\n~УКАЖИТЕ РАЗМЕРЫ КОМНАТЫ~")
+    """Запрос размеров у пользователя."""
+    print("УКАЖИТЕ РАЗМЕРЫ КОМНАТЫ")
     print("1. Автоопределение из фотографий")
-    print("2. Ввести размеры вручную")
+    print("2. Ввести размеры вручную (точно)")
+    print("3. Указать один известный размер для калибровки")
     print()
 
-    choice = input("Выберите вариант (1 или 2): ").strip()
+    choice = input("Выберите вариант (1, 2 или 3): ").strip()
 
     if choice == "2":
         try:
@@ -113,15 +174,23 @@ def ask_room_dimensions():
             length = float(input("Длина комнаты (м): "))
             height = float(input("Высота потолка (м) [2.7]: ") or "2.7")
 
-            return RoomDimensions(
-                width=width,
-                length=length,
-                height=height,
-                area=width * length
-            )
+            return RoomDimensions(width, length, height, width*length), None
         except ValueError:
-            print("Ошибка ввода! Используем автоопределение.")
-            return None
+            print("Ошибка ввода!")
+            return None, None
 
-    return None  # Автоопределение
+    elif choice == "3":
+        try:
+            print("\\nУкажите один известный размер:")
+            kw = input("Известная ширина (м) [Enter - неизвестно]: ").strip()
+            kl = input("Известная длина (м) [Enter - неизвестно]: ").strip()
 
+            known_width = float(kw) if kw else None
+            known_length = float(kl) if kl else None
+
+            return None, (known_width, known_length)
+        except ValueError:
+            print("Ошибка ввода!")
+            return None, None
+
+    return None, None
