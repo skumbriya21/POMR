@@ -15,6 +15,16 @@ class RoomReconstructor:
         self.points_3d = []
 
     def reconstruct(self, images):
+        """
+        Основной метод реконструкции.
+
+        Args:
+            images: Список изображений (numpy arrays)
+
+        Returns:
+            points_3d: Облако 3D точек
+            cameras: Список камер с позами
+        """
         print(f"Обработка {len(images)} изображений...")
 
         # 1. Детекция ключевых точек на всех изображениях
@@ -28,7 +38,7 @@ class RoomReconstructor:
             print(f"  Изображение {i+1}: {len(kp)} ключевых точек")
 
         # 2. Сопоставление между первой парой
-        print("\nСопоставление первой пары изображений...")
+        print("\\nСопоставление первой пары изображений...")
         matches = self.matcher.match(all_descriptors[0], all_descriptors[1])
         print(f"  Найдено {len(matches)} соответствий")
 
@@ -36,7 +46,7 @@ class RoomReconstructor:
         matches, F = self.matcher.filter_by_geometry(
             all_keypoints[0], all_keypoints[1], matches, self.K
         )
-        print(f" После геометрической фильтрации: {len(matches)}")
+        print(f"  После геометрической фильтрации: {len(matches)}")
 
         if len(matches) < 20:
             raise ValueError("Слишком мало соответствий для реконструкции")
@@ -73,6 +83,6 @@ class RoomReconstructor:
 
         self.points_3d = points_3d
 
-        print(f"\nРеконструировано {len(points_3d)} 3D точек")
+        print(f"\\nРеконструировано {len(points_3d)} 3D точек")
 
         return points_3d, self.cameras
