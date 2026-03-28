@@ -1,6 +1,6 @@
 import numpy as np
 from dataclasses import dataclass
-from typing import List
+from typing import List, Dict, Optional
 import random
 
 
@@ -21,6 +21,18 @@ class Window:
     width: float
     height: float
     wall: str
+
+
+@dataclass
+class Door:
+    """Дверной проем."""
+    x: float  # Позиция вдоль стены от начала
+    width: float  # Ширина двери
+    height: float  # Высота двери
+    wall: str  # На какой стене: 'left', 'right', 'top', 'bottom'
+    has_glass: bool = False  # Стеклянная ли дверь
+    is_open: bool = False  # Открыта ли дверь на фото
+    confidence: float = 1.0  # Уверенность детекции
 
 
 class RoomDetector:
@@ -93,18 +105,9 @@ class RoomDetector:
         return points[mask]
 
     def auto_place_windows(self, room_dims: RoomDimensions) -> List[Window]:
-        """
-        Автоматическое размещение окон на основе размеров комнаты.
-
-        Логика:
-        - Комнаты < 4м: 1 окно
-        - Комнаты 4-6м: 1-2 окна
-        - Комнаты 6-10м: 2 окна
-        - Комнаты > 10м: 2-3 окна
-        """
+        """Автоматическое размещение окон."""
         windows = []
 
-        # Определяем количество окон по площади
         area = room_dims.area
 
         if area < 12:
@@ -116,21 +119,17 @@ class RoomDetector:
         else:
             num_windows = random.choice([2, 3])
 
-        # Размеры окон (стандартные)
         window_width = random.choice([1.0, 1.2, 1.5])
         window_height = random.choice([1.2, 1.4, 1.5])
 
-        # Размещаем окна
         walls = ['right', 'top', 'left', 'bottom']
 
         for i in range(num_windows):
-            # Выбираем стену
             if num_windows <= 2:
-                wall = walls[i % 2]  # right и top
+                wall = walls[i % 2]
             else:
                 wall = walls[i % 4]
 
-            # Позиция вдоль стены (случайная, но не у края)
             if wall in ['left', 'right']:
                 max_pos = room_dims.length
                 margin = room_dims.length * 0.15
@@ -140,7 +139,6 @@ class RoomDetector:
                 margin = room_dims.width * 0.15
                 x = random.uniform(margin, max_pos - margin - window_width)
 
-            # Высота от пола (стандартная)
             y = random.uniform(0.8, 1.2)
 
             windows.append(Window(
@@ -174,14 +172,14 @@ def ask_room_dimensions():
             length = float(input("Длина комнаты (м): "))
             height = float(input("Высота потолка (м) [2.7]: ") or "2.7")
 
-            return RoomDimensions(width, length, height, width*length), None
+            return RoomDimensions(width, length, height, width * length), None
         except ValueError:
             print("Ошибка ввода!")
             return None, None
 
     elif choice == "3":
         try:
-            print("\\nУкажите один известный размер:")
+            print("\nУкажите один известный размер:")
             kw = input("Известная ширина (м) [Enter - неизвестно]: ").strip()
             kl = input("Известная длина (м) [Enter - неизвестно]: ").strip()
 
@@ -194,3 +192,130 @@ def ask_room_dimensions():
             return None, None
 
     return None, None
+
+
+def auto_place_door(room_dims: RoomDimensions, windows: List[Window],
+                    detected_door_info: Optional[Dict] = None) -> Door:
+    """
+    Автоматическое размещение двери на основе детекции с фото.
+
+    Args:
+        room_dims: Размеры комнаты
+        windows: Список окон
+        detected_door_info: Информация о двери с фото (из DoorDetector)
+
+    Returns:
+        Объект Door
+    """
+    w, l = room_dims.width, room_dims.length
+
+    # Если есть детекция с фото - используем её
+    if detected_door_info:
+        wall = detected_door_info.get('wall', 'bottom')
+        door_x = detected_door_info.get('x', w * 0.5)
+        door_width = detected_door_info.get('width', 0.9)
+        door_height = detected_door_info.get('height', 2.0)
+        has_glass = detected_door_info.get('has_glass', False)
+        is_open = detected_door_info.get('is_open', False)
+        confidence = detected_door_info.get('confidence', 1.0)
+
+        return Door(
+            x=round(door_x, 2),
+            width=door_width,
+            height=door_height,
+            wall=wall,
+            has_glass=has_glass,
+            is_open=is_open,
+            confidence=confidence
+        )
+
+    # Иначе используем эвристическое размещение
+    walls_with_windows = set(win.wall for win in windows)
+
+    # Выбираем стену для двери
+    if w >= l:
+        long_walls = ['top', 'bottom']
+        short_walls = ['left', 'right']
+        max_pos = w
+    else:
+        long_walls = ['left', 'right']
+        short_walls = ['top', 'bottom']
+        max_pos = l
+
+    door_wall = None
+    for wall in long_walls:
+        if wall not in walls_with_windows:
+            door_wall = wall
+            break
+
+    if door_wall is None:
+        door_wall = long_walls[0]
+
+    if door_wall in walls_with_windows:
+        for wall in short_walls:
+            if wall not in walls_with_windows:
+                door_wall = wall
+                max_pos = w if wall in ['top', 'bottom'] else l
+                break
+
+    door_width = 0.9
+    door_height = 2.0
+
+    wall_windows = [win for win in windows if win.wall == door_wall]
+
+    # Поиск свободного места
+    left_position = 0.15
+    right_position = max_pos - door_width - 0.15
+
+    if not wall_windows:
+        door_x = left_position
+    else:
+        sorted_windows = sorted(wall_windows, key=lambda win: win.x)
+        first_window_start = sorted_windows[0].x
+
+        if first_window_start >= door_width + 0.3:
+            door_x = left_position
+        else:
+            last_window = sorted_windows[-1]
+            last_window_end = last_window.x + last_window.width
+
+            if max_pos - last_window_end >= door_width + 0.3:
+                door_x = right_position
+            else:
+                found_spot = False
+                best_x = left_position
+
+                for i in range(len(sorted_windows) - 1):
+                    gap_start = sorted_windows[i].x + sorted_windows[i].width
+                    gap_end = sorted_windows[i + 1].x
+                    gap_size = gap_end - gap_start
+
+                    if gap_size >= door_width + 0.4:
+                        best_x = gap_start + 0.2
+                        found_spot = True
+                        break
+
+                if not found_spot:
+                    left_space = first_window_start
+                    right_space = max_pos - last_window_end
+
+                    if left_space >= right_space:
+                        door_x = max(0.1, first_window_start - door_width - 0.1)
+                    else:
+                        door_x = min(max_pos - door_width - 0.1, last_window_end + 0.1)
+                else:
+                    door_x = best_x
+
+    door_x = max(0.1, min(door_x, max_pos - door_width - 0.1))
+
+    print(f"  Дверь размещена эвристически: стена {door_wall}, позиция {door_x:.2f}м")
+
+    return Door(
+        x=round(door_x, 2),
+        width=door_width,
+        height=door_height,
+        wall=door_wall,
+        has_glass=False,
+        is_open=False,
+        confidence=0.5
+    )

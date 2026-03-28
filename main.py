@@ -6,8 +6,10 @@ from utils import load_images
 from room_detector import RoomDimensions, Window
 from floorplan import FloorplanDrawer
 from window_detector import WindowDetectorCV, map_windows_to_floorplan
-from model3d import create_3d_model  # НОВЫЙ ИМПОРТ
-
+from model3d import create_3d_model
+from door_detector import DoorDetectorCV, map_door_to_floorplan
+from room_detector import Door, auto_place_door
+from model_from_floorplan import create_3d_model_from_floorplan
 
 def get_room_dimensions_interactive():
     """Интерактивный ввод размеров комнаты."""
@@ -267,15 +269,22 @@ def main():
 
     detected_windows = []
     manual_windows = []
+    detected_doors = []
 
     # Автоматическая детекция (если не --manual-only)
     if not args.manual_only:
         window_detector = WindowDetectorCV()
         detected_windows = window_detector.analyze_multiple_images(images)
-        print(f"\n  Автоматически обнаружено: {len(detected_windows)} окон")
+        print(f"\n  Автоматически обнаружено окон: {len(detected_windows)}")
         for w in detected_windows:
             status = "✓" if w.get('verified') else "~"
             print(f"    {status} Стена {w['position']}: уверенность {w['confidence']:.2f}")
+
+        # НОВОЕ: Детекция дверей
+        print("\n  Поиск дверей на фотографиях...")
+        door_detector = DoorDetectorCV()
+        detected_doors = door_detector.analyze_multiple_images(images)
+        print(f"  Автоматически обнаружено дверей: {len(detected_doors)}")
 
     # Ручной ввод или подтверждение
     if not args.auto_only:
@@ -334,12 +343,90 @@ def main():
 
     print(f"\n  ✓ Итого окон для планировки: {len(final_windows)}")
 
+    final_door = None
+
+    if detected_doors:
+        # Берем дверь с максимальной уверенностью
+        best_door = max(detected_doors, key=lambda d: d['confidence'])
+
+        # Подтверждение двери у пользователя
+        print(f"\n  Обнаружена дверь на стене {best_door['position']} (уверенность {best_door['confidence']:.2f})")
+        if not args.auto_only:
+            confirm = input("  Использовать эту дверь? (y/n/edit): ").strip().lower()
+
+            if confirm in ['n', 'no', 'нет']:
+                print("  Дверь не будет добавлена в планировку")
+                final_door = None
+            elif confirm in ['edit', 'e']:
+                # Ручной ввод двери
+                print("  Укажите расположение двери:")
+                walls = ['left', 'right', 'top', 'bottom']
+                for i, w in enumerate(walls, 1):
+                    print(f"    {i}. {w}")
+                wall_choice = input("  Номер стены [2]: ").strip()
+                try:
+                    wall_idx = int(wall_choice) - 1 if wall_choice else 1
+                    wall = walls[wall_idx]
+                except:
+                    wall = best_door['position']
+
+                door_width = float(input("  Ширина двери (м) [0.9]: ").strip() or "0.9")
+                door_height = float(input("  Высота двери (м) [2.0]: ").strip() or "2.0")
+
+                if wall in ['left', 'right']:
+                    max_pos = room_dims.length
+                else:
+                    max_pos = room_dims.width
+
+                door_x = float(input(f"  Позиция от края (м, 0-{max_pos:.1f}) [0.5]: ").strip() or "0.5")
+
+                final_door = Door(
+                    x=door_x,
+                    width=door_width,
+                    height=door_height,
+                    wall=wall,
+                    has_glass=False,
+                    is_open=False,
+                    confidence=1.0
+                )
+            else:
+                # Преобразуем в формат для floorplan
+                from door_detector import map_door_to_floorplan
+                final_door = map_door_to_floorplan(
+                    detected_doors,
+                    room_dims.width,
+                    room_dims.length,
+                    windows_3d if 'windows_3d' in locals() else []
+                )
+        else:
+            from door_detector import map_door_to_floorplan
+            final_door = map_door_to_floorplan(
+                detected_doors,
+                room_dims.width,
+                room_dims.length,
+                windows_3d if 'windows_3d' in locals() else []
+            )
+
+    # Если дверь не обнаружена, используем эвристику
+    if final_door is None:
+        from room_detector import auto_place_door
+        final_door = auto_place_door(
+            room_dims,
+            windows_3d if 'windows_3d' in locals() else [],
+            None
+        )
+
+    doors = [final_door] if final_door else []
+
     # === ЭТАП 3: Создание планировки ===
     print("\n[3/3] Создание планировки...")
 
-    # Конвертируем в формат для отрисовки
+    # === ЭТАП 3: Создание планировки ===
+    print("\n[3/3] Создание планировки...")
+
+    # Сначала конвертируем окна в формат для отрисовки и 3D
     windows_for_drawer = []
-    windows_3d = []  # Для 3D модели
+    windows_3d = []  # Создаем список здесь, ДО использования
 
     for w in final_windows:
         # Если уже есть x/y (из ручного ввода)
@@ -367,26 +454,49 @@ def main():
                 continue
 
         windows_for_drawer.append(win_obj)
-        windows_3d.append(win_obj)
+        windows_3d.append(win_obj)  # Заполняем список
 
+    # Теперь, когда windows_3d заполнен, размещаем дверь
+    door = auto_place_door(room_dims, windows_3d)
+    doors = [door]
+
+    # Рисуем планировку
     drawer = FloorplanDrawer()
-    drawer.draw(room_dims, windows_for_drawer, args.output)
+    drawer.draw(room_dims, windows_for_drawer, doors, args.output, images=images)
 
     # === ЭТАП 4: Создание 3D модели ===
     if not args.no_3d:
-        create_3d_model(room_dims, windows_3d, args.output_3d)
+        # Добавляем отладочный вывод
+        print("\n" + "=" * 50)
+        print("ПОДГОТОВКА ДАННЫХ ДЛЯ 3D МОДЕЛИ:")
+        print(f"windows_3d: {len(windows_3d)} окон")
+        for w in windows_3d:
+            print(f"  - {w.wall}: x={w.x}, y={w.y}, w={w.width}, h={w.height}")
+        print(f"doors: {len(doors)} дверей")
+        for d in doors:
+            print(f"  - {d.wall}: x={d.x}, w={d.width}, h={d.height}")
+        print("=" * 50)
+
+        # Создаем 3D модель на основе планировки
+        create_3d_model_from_floorplan(
+            room_dims=room_dims,
+            windows=windows_3d,
+            doors=doors,
+            output_path=args.output_3d,
+            floorplan_path=args.output
+        )
 
     # Итог
-    print("ГОТОВО!")
+    print("\nГОТОВО!")
     print(f"Размеры комнаты: {room_dims.width}м × {room_dims.length}м = {room_dims.area}м²")
     print(f"Высота потолка: {room_dims.height}м")
     print(f"Окон: {len(windows_3d)}")
+    print(f"Дверей: {len(doors)}")
     print(f"\nФайлы:")
     print(f"  Планировка: {args.output}")
     if not args.no_3d:
         print(f"  3D модель:  {args.output_3d}")
         print(f"  Материалы:  {args.output_3d.replace('.obj', '.mtl')}")
-
 
 if __name__ == "__main__":
     main()
