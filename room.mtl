@@ -1,8 +1,8 @@
 # Room materials - Generated from floorplan
 
 newmtl wall_0
-Ka 0.451 0.451 0.510
-Kd 0.451 0.451 0.510
+Ka 0.471 0.471 0.647
+Kd 0.471 0.471 0.647
 Ks 0.1 0.1 0.1
 Ns 10
 illum 2
@@ -23,8 +23,8 @@ Ns 20
 illum 2
 
 newmtl wall_1
-Ka 0.451 0.451 0.510
-Kd 0.451 0.451 0.510
+Ka 0.471 0.471 0.647
+Kd 0.471 0.471 0.647
 Ks 0.1 0.1 0.1
 Ns 10
 illum 2
@@ -45,8 +45,8 @@ Ns 20
 illum 2
 
 newmtl wall_2
-Ka 0.451 0.451 0.510
-Kd 0.451 0.451 0.510
+Ka 0.471 0.471 0.647
+Kd 0.471 0.471 0.647
 Ks 0.1 0.1 0.1
 Ns 10
 illum 2
@@ -67,8 +67,8 @@ Ns 20
 illum 2
 
 newmtl wall_3
-Ka 0.451 0.451 0.510
-Kd 0.451 0.451 0.510
+Ka 0.471 0.471 0.647
+Kd 0.471 0.471 0.647
 Ks 0.1 0.1 0.1
 Ns 10
 illum 2
@@ -89,8 +89,50 @@ Ns 20
 illum 2
 
 newmtl floor
-Ka 0.647 0.647 0.647
-Kd 0.647 0.647 0.647
+Ka 0.500 0.400 0.300
+Kd 0.500 0.400 0.300
 Ks 0.1 0.1 0.1
 Ns 5
+illum 2
+
+newmtl furniture_0
+Ka 0.600 0.400 0.200
+Kd 0.600 0.400 0.200
+Ks 0.3 0.3 0.3
+Ns 30
+illum 2
+
+newmtl furniture_1
+Ka 0.400 0.400 0.400
+Kd 0.400 0.400 0.400
+Ks 0.3 0.3 0.3
+Ns 30
+illum 2
+
+newmtl furniture_2
+Ka 0.800 0.600 0.400
+Kd 0.800 0.600 0.400
+Ks 0.3 0.3 0.3
+Ns 30
+illum 2
+
+newmtl furniture_3
+Ka 0.300 0.300 0.500
+Kd 0.300 0.300 0.500
+Ks 0.3 0.3 0.3
+Ns 30
+illum 2
+
+newmtl furniture_4
+Ka 0.700 0.700 0.600
+Kd 0.700 0.700 0.600
+Ks 0.3 0.3 0.3
+Ns 30
+illum 2
+
+newmtl furniture_5
+Ka 0.600 0.400 0.200
+Kd 0.600 0.400 0.200
+Ks 0.3 0.3 0.3
+Ns 30
 illum 2
