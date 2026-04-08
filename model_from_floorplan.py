@@ -6,6 +6,10 @@ from pathlib import Path
 from PIL import Image
 from collections import Counter
 import os
+from typing import TYPE_CHECKING
+
+# Импортируем BoundingBox3D напрямую
+from furniture_detector import BoundingBox3D
 
 
 @dataclass
@@ -35,6 +39,7 @@ class ModelFromFloorplan:
         self.floorplan_image = floorplan_image
         self.walls = []
         self.floor = None
+        self.furniture = []  # Инициализируем пустым списком
 
         # Стандартные цвета
         self.wall_color = (0.85, 0.85, 0.85)
@@ -138,11 +143,11 @@ class ModelFromFloorplan:
             'back_left': np.array([0, 0, l])
         }
 
-        # Определяем стены
+        # Оригинальное сопоставление из твоего файла (правильное!)
         walls_config = [
             {
                 'name_3d': 'bottom',
-                'plan_name': 'top',
+                'plan_name': 'top',  # дальняя стена на планировке -> bottom в 3D
                 'start': corners['front_left'],
                 'end': corners['front_right'],
                 'normal': np.array([0, 0, -1]),
@@ -150,7 +155,7 @@ class ModelFromFloorplan:
             },
             {
                 'name_3d': 'right',
-                'plan_name': 'right',
+                'plan_name': 'right',  # правая стена
                 'start': corners['front_right'],
                 'end': corners['back_right'],
                 'normal': np.array([1, 0, 0]),
@@ -158,7 +163,7 @@ class ModelFromFloorplan:
             },
             {
                 'name_3d': 'top',
-                'plan_name': 'bottom',
+                'plan_name': 'bottom',  # ближняя стена на планировке -> top в 3D
                 'start': corners['back_right'],
                 'end': corners['back_left'],
                 'normal': np.array([0, 0, 1]),
@@ -166,7 +171,7 @@ class ModelFromFloorplan:
             },
             {
                 'name_3d': 'left',
-                'plan_name': 'left',
+                'plan_name': 'left',  # левая стена
                 'start': corners['back_left'],
                 'end': corners['front_left'],
                 'normal': np.array([-1, 0, 0]),
@@ -237,7 +242,6 @@ class ModelFromFloorplan:
             'normal': np.array([0, 1, 0]),
             'color': self.floor_color
         }
-
 
     def _build_wall_segments(self, wall, vertex_offset, wall_idx):
         """Построение стены с разбиением на сегменты."""
@@ -368,6 +372,68 @@ class ModelFromFloorplan:
 
         return vertices, faces, vertex_offset + len(vertices)
 
+    def add_furniture(self, furniture_boxes: List[BoundingBox3D]):
+        """Добавление мебели как 3D коробок."""
+        self.furniture = furniture_boxes
+        print(f"\n  Добавлено {len(furniture_boxes)} объектов мебели")
+
+    def _build_furniture_box(self, box: BoundingBox3D, vertex_offset: int, idx: int):
+        """Построение одной коробки мебели."""
+        vertices = []
+        faces = []
+
+        c = box.center
+        w, h, d = box.dimensions / 2  # Половины размеров
+
+        # 8 вершин куба
+        corners = [
+            c + np.array([-w, -h, -d]),  # 0: нижний левый ближний
+            c + np.array([w, -h, -d]),  # 1: нижний правый ближний
+            c + np.array([w, h, -d]),  # 2: верхний правый ближний
+            c + np.array([-w, h, -d]),  # 3: верхний левый ближний
+            c + np.array([-w, -h, d]),  # 4: нижний левый дальний
+            c + np.array([w, -h, d]),  # 5: нижний правый дальний
+            c + np.array([w, h, d]),  # 6: верхний правый дальний
+            c + np.array([-w, h, d]),  # 7: верхний левый дальний
+        ]
+
+        base = vertex_offset
+        vertices.extend(corners)
+
+        # Грани (каждая как 2 треугольника)
+        # Нижняя (нормаль -Y)
+        faces.extend([
+            (f"furniture_{idx}", base, base + 1, base + 5),
+            (f"furniture_{idx}", base, base + 5, base + 4),
+        ])
+        # Верхняя (нормаль +Y)
+        faces.extend([
+            (f"furniture_{idx}", base + 3, base + 2, base + 6),
+            (f"furniture_{idx}", base + 3, base + 6, base + 7),
+        ])
+        # Передняя (нормаль -Z)
+        faces.extend([
+            (f"furniture_{idx}", base, base + 1, base + 2),
+            (f"furniture_{idx}", base, base + 2, base + 3),
+        ])
+        # Задняя (нормаль +Z)
+        faces.extend([
+            (f"furniture_{idx}", base + 4, base + 5, base + 6),
+            (f"furniture_{idx}", base + 4, base + 6, base + 7),
+        ])
+        # Левая (нормаль -X)
+        faces.extend([
+            (f"furniture_{idx}", base, base + 4, base + 7),
+            (f"furniture_{idx}", base, base + 7, base + 3),
+        ])
+        # Правая (нормаль +X)
+        faces.extend([
+            (f"furniture_{idx}", base + 1, base + 5, base + 6),
+            (f"furniture_{idx}", base + 1, base + 6, base + 2),
+        ])
+
+        return vertices, faces, vertex_offset + 8
+
     def export_obj(self, filename):
         """Экспорт в Wavefront OBJ формат."""
         all_vertices = []
@@ -396,6 +462,47 @@ class ModelFromFloorplan:
         all_faces.extend(faces)
         print(f"    Пол: {len(verts)} вершин, {len(faces)} граней")
 
+        # МЕБЕЛЬ
+        if self.furniture:
+            print("\n  Генерация мебели:")
+            for i, box in enumerate(self.furniture):
+                verts, faces, vertex_offset = self._build_furniture_box(box, vertex_offset, i)
+                all_vertices.extend(verts)
+                all_faces.extend(faces)
+                print(f"    Коробка {i + 1}: {box.dimensions[0]:.2f}×{box.dimensions[1]:.2f}×{box.dimensions[2]:.2f}м")
+
+        # Собираем все уникальные нормали
+        all_normals = []
+        normal_map = {}
+
+        # Нормали стен
+        for wall in self.walls:
+            normal_tuple = tuple(wall.normal)
+            if normal_tuple not in normal_map:
+                normal_map[normal_tuple] = len(all_normals) + 1
+                all_normals.append(wall.normal)
+
+        # Нормаль пола
+        floor_normal = tuple(self.floor['normal'])
+        if floor_normal not in normal_map:
+            normal_map[floor_normal] = len(all_normals) + 1
+            all_normals.append(self.floor['normal'])
+
+        # Нормали для мебели (6 сторон куба)
+        furniture_normals = [
+            np.array([0, -1, 0]),  # bottom
+            np.array([0, 1, 0]),  # top
+            np.array([0, 0, -1]),  # front
+            np.array([0, 0, 1]),  # back
+            np.array([-1, 0, 0]),  # left
+            np.array([1, 0, 0]),  # right
+        ]
+        for fn in furniture_normals:
+            fn_tuple = tuple(fn)
+            if fn_tuple not in normal_map:
+                normal_map[fn_tuple] = len(all_normals) + 1
+                all_normals.append(fn)
+
         # Записываем OBJ файл
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(f"# Room 3D Model - Generated from floorplan\n")
@@ -410,17 +517,12 @@ class ModelFromFloorplan:
 
             # Нормали
             f.write("\n")
-            for wall in self.walls:
-                f.write(f"vn {wall.normal[0]:.4f} {wall.normal[1]:.4f} {wall.normal[2]:.4f}\n")
-            f.write(f"vn {self.floor['normal'][0]:.4f} {self.floor['normal'][1]:.4f} {self.floor['normal'][2]:.4f}\n")
-
+            for normal in all_normals:
+                f.write(f"vn {normal[0]:.4f} {normal[1]:.4f} {normal[2]:.4f}\n")
 
             # Грани
             f.write("\n")
             current_mtl = None
-            wall_normal_offset = 1
-            floor_normal_offset = wall_normal_offset + len(self.walls)
-            ceiling_normal_offset = floor_normal_offset + 1
 
             for face in all_faces:
                 mat = face[0]
@@ -428,15 +530,22 @@ class ModelFromFloorplan:
                     current_mtl = mat
                     f.write(f"usemtl {mat}\n")
 
-                # Определяем индекс нормали
+                # Определяем индекс нормали по материалу
                 if mat == "floor":
-                    ni = floor_normal_offset
-                elif mat == "ceiling":
-                    ni = ceiling_normal_offset
+                    ni = normal_map[tuple(self.floor['normal'])]
+                elif mat.startswith("furniture_"):
+                    # Для мебели используем разные нормали для разных граней
+                    # Но пока используем общую нормаль
+                    ni = normal_map[tuple(furniture_normals[0])]
                 else:
+                    # Для стен, окон, дверей
                     wall_idx = int(mat.split('_')[1]) if '_' in mat and len(mat.split('_')) > 1 else 0
-                    ni = wall_normal_offset + wall_idx
+                    if wall_idx < len(self.walls):
+                        ni = normal_map[tuple(self.walls[wall_idx].normal)]
+                    else:
+                        ni = 1
 
+                # Формируем строку грани
                 if len(face) == 4:  # Треугольник
                     _, v1, v2, v3 = face
                     f.write(f"f {v1}/{1}/{ni} {v2}/{2}/{ni} {v3}/{3}/{ni}\n")
@@ -500,10 +609,33 @@ Ns 5
 illum 2
 """)
 
+            # МЕБЕЛЬ
+            furniture_colors = [
+                (0.6, 0.4, 0.2),  # Коричневый (дерево)
+                (0.4, 0.4, 0.4),  # Серый (металл)
+                (0.8, 0.6, 0.4),  # Светлое дерево
+                (0.3, 0.3, 0.5),  # Темно-синий
+                (0.7, 0.7, 0.6),  # Бежевый
+            ]
+            num_furniture = len(self.furniture) if hasattr(self, 'furniture') else 0
+            for i in range(max(num_furniture, 1)):
+                r, g, b = furniture_colors[i % len(furniture_colors)]
+                f.write(f"""
+newmtl furniture_{i}
+Ka {r:.3f} {g:.3f} {b:.3f}
+Kd {r:.3f} {g:.3f} {b:.3f}
+Ks 0.3 0.3 0.3
+Ns 30
+illum 2
+""")
 
-def create_3d_model_from_floorplan(room_dims, windows, doors, output_path, floorplan_path=None):
+
+def create_3d_model_from_floorplan(room_dims, windows, doors, output_path,
+                                   floorplan_path=None, furniture_boxes=None):
     """Создание 3D модели на основе 2D планировки."""
+    print("\n" + "=" * 60)
     print("ПОСТРОЕНИЕ 3D МОДЕЛИ НА ОСНОВЕ ПЛАНИРОВКИ")
+    print("=" * 60)
     print(f"Размеры комнаты: {room_dims.width}м x {room_dims.length}м x {room_dims.height}м")
     print(f"Окон: {len(windows)}")
     for w in windows:
@@ -511,11 +643,17 @@ def create_3d_model_from_floorplan(room_dims, windows, doors, output_path, floor
     print(f"Дверей: {len(doors)}")
     for d in doors:
         print(f"  Дверь: стена={d.wall}, x={d.x:.2f}м, {d.width}x{d.height}м")
+    if furniture_boxes:
+        print(f"Мебели: {len(furniture_boxes)} объектов")
     print("=" * 60)
 
     model = ModelFromFloorplan(room_dims, floorplan_path)
     model.extract_floorplan_features()
     model.build_walls(windows, doors)
+
+    if furniture_boxes:
+        model.add_furniture(furniture_boxes)
+
     model.export_obj(output_path)
 
     return model

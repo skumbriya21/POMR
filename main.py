@@ -10,6 +10,11 @@ from model3d import create_3d_model
 from door_detector import DoorDetectorCV, map_door_to_floorplan
 from room_detector import Door, auto_place_door
 from model_from_floorplan import create_3d_model_from_floorplan
+from furniture_detector import (
+    FurnitureDetectorCV, Furniture3DReconstructor,
+    map_furniture_to_3d, BoundingBox3D
+)
+
 
 def get_room_dimensions_interactive():
     """Интерактивный ввод размеров комнаты."""
@@ -250,7 +255,7 @@ def main():
         sys.exit(1)
 
     # === ЭТАП 1: Определение размеров комнаты ===
-    print("\n[1/3] Определение размеров комнаты...")
+    print("\n[1/4] Определение размеров комнаты...")
 
     if args.width and args.length:
         room_dims = RoomDimensions(
@@ -265,7 +270,7 @@ def main():
         print(f"  ✓ Размеры комнаты: {room_dims.width}м × {room_dims.length}м")
 
     # === ЭТАП 2: Анализ и подтверждение окон ===
-    print("\n[2/3] Анализ фотографий на наличие окон...")
+    print("\n[2/4] Анализ фотографий на наличие окон...")
 
     detected_windows = []
     manual_windows = []
@@ -280,7 +285,7 @@ def main():
             status = "✓" if w.get('verified') else "~"
             print(f"    {status} Стена {w['position']}: уверенность {w['confidence']:.2f}")
 
-        # НОВОЕ: Детекция дверей
+        # Детекция дверей
         print("\n  Поиск дверей на фотографиях...")
         door_detector = DoorDetectorCV()
         detected_doors = door_detector.analyze_multiple_images(images)
@@ -343,6 +348,41 @@ def main():
 
     print(f"\n  ✓ Итого окон для планировки: {len(final_windows)}")
 
+    # === СОЗДАЁМ windows_3d И doors ЗДЕСЬ, ДО ДЕТЕКЦИИ МЕБЕЛИ ===
+
+    # Конвертируем окна в формат для отрисовки и 3D
+    windows_for_drawer = []
+    windows_3d = []
+
+    for w in final_windows:
+        # Если уже есть x/y (из ручного ввода)
+        if 'x' in w and 'y' in w:
+            win_obj = Window(
+                x=w['x'],
+                y=w['y'],
+                width=w['width'],
+                height=w['height'],
+                wall=w['wall']
+            )
+        else:
+            # Из авто-детекции — через map_windows_to_floorplan
+            mapped = map_windows_to_floorplan([w], room_dims.width, room_dims.length)
+            if mapped:
+                m = mapped[0]
+                win_obj = Window(
+                    x=m['x'],
+                    y=m['y'],
+                    width=m['width'],
+                    height=m['height'],
+                    wall=m['wall']
+                )
+            else:
+                continue
+
+        windows_for_drawer.append(win_obj)
+        windows_3d.append(win_obj)
+
+    # Размещаем дверь
     final_door = None
 
     if detected_doors:
@@ -396,7 +436,7 @@ def main():
                     detected_doors,
                     room_dims.width,
                     room_dims.length,
-                    windows_3d if 'windows_3d' in locals() else []
+                    windows_3d
                 )
         else:
             from door_detector import map_door_to_floorplan
@@ -404,7 +444,7 @@ def main():
                 detected_doors,
                 room_dims.width,
                 room_dims.length,
-                windows_3d if 'windows_3d' in locals() else []
+                windows_3d
             )
 
     # Если дверь не обнаружена, используем эвристику
@@ -412,59 +452,40 @@ def main():
         from room_detector import auto_place_door
         final_door = auto_place_door(
             room_dims,
-            windows_3d if 'windows_3d' in locals() else [],
+            windows_3d,
             None
         )
 
     doors = [final_door] if final_door else []
 
-    # === ЭТАП 3: Создание планировки ===
-    print("\n[3/3] Создание планировки...")
+    # === ЭТАП 3: Детекция мебели ===
+    print("\n[3/4] Анализ фотографий на наличие мебели...")
 
-    # === ЭТАП 3: Создание планировки ===
-    print("\n[3/3] Создание планировки...")
+    furniture_detector = FurnitureDetectorCV()
+    detected_furniture = furniture_detector.analyze_multiple_images(images)
 
-    # Сначала конвертируем окна в формат для отрисовки и 3D
-    windows_for_drawer = []
-    windows_3d = []  # Создаем список здесь, ДО использования
+    print(f"\n  Обнаружено объектов мебели: {len(detected_furniture)}")
+    for furn in detected_furniture:
+        status = "✓" if furn.get('verified') else "~"
+        print(f"    {status} {furn['type'].value}: уверенность {furn['confidence']:.2f}")
 
-    for w in final_windows:
-        # Если уже есть x/y (из ручного ввода)
-        if 'x' in w and 'y' in w:
-            win_obj = Window(
-                x=w['x'],
-                y=w['y'],
-                width=w['width'],
-                height=w['height'],
-                wall=w['wall']
-            )
-        else:
-            # Из авто-детекции — через map_windows_to_floorplan
-            mapped = map_windows_to_floorplan([w], room_dims.width, room_dims.length)
-            if mapped:
-                m = mapped[0]
-                win_obj = Window(
-                    x=m['x'],
-                    y=m['y'],
-                    width=m['width'],
-                    height=m['height'],
-                    wall=m['wall']
-                )
-            else:
-                continue
+    # Реконструкция 3D коробок
+    furniture_boxes = []
+    if detected_furniture:
+        print("\n  Реконструкция 3D позиций...")
+        furniture_boxes = map_furniture_to_3d(
+            detected_furniture, room_dims, windows_3d, doors
+        )
+        print(f"  Размещено в 3D: {len(furniture_boxes)} объектов")
 
-        windows_for_drawer.append(win_obj)
-        windows_3d.append(win_obj)  # Заполняем список
-
-    # Теперь, когда windows_3d заполнен, размещаем дверь
-    door = auto_place_door(room_dims, windows_3d)
-    doors = [door]
+    # === ЭТАП 4: Создание планировки ===
+    print("\n[4/4] Создание планировки...")
 
     # Рисуем планировку
     drawer = FloorplanDrawer()
     drawer.draw(room_dims, windows_for_drawer, doors, args.output, images=images)
 
-    # === ЭТАП 4: Создание 3D модели ===
+    # === ЭТАП 5: Создание 3D модели ===
     if not args.no_3d:
         # Добавляем отладочный вывод
         print("\n" + "=" * 50)
@@ -475,6 +496,7 @@ def main():
         print(f"doors: {len(doors)} дверей")
         for d in doors:
             print(f"  - {d.wall}: x={d.x}, w={d.width}, h={d.height}")
+        print(f"furniture: {len(furniture_boxes)} объектов мебели")
         print("=" * 50)
 
         # Создаем 3D модель на основе планировки
@@ -483,7 +505,8 @@ def main():
             windows=windows_3d,
             doors=doors,
             output_path=args.output_3d,
-            floorplan_path=args.output
+            floorplan_path=args.output,
+            furniture_boxes=furniture_boxes
         )
 
     # Итог
@@ -492,11 +515,13 @@ def main():
     print(f"Высота потолка: {room_dims.height}м")
     print(f"Окон: {len(windows_3d)}")
     print(f"Дверей: {len(doors)}")
+    print(f"Объектов мебели: {len(furniture_boxes)}")
     print(f"\nФайлы:")
     print(f"  Планировка: {args.output}")
     if not args.no_3d:
         print(f"  3D модель:  {args.output_3d}")
         print(f"  Материалы:  {args.output_3d.replace('.obj', '.mtl')}")
+
 
 if __name__ == "__main__":
     main()
